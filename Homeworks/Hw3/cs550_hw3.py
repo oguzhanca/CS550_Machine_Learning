@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn import svm
-from sklearn.metrics import confusion_matrix, accuracy_score, f1_score
+from sklearn.preprocessing import normalize
+from sklearn.metrics import confusion_matrix, accuracy_score, fbeta_score
 
 
 class Genetic:
@@ -11,6 +12,7 @@ class Genetic:
         self.num_generations = num_generations
         self.prob_mutation = prob_mutation
         self.survive_ratio = survive_ratio
+        self.num_survive = 0
 
         self.population = np.zeros((self.num_population, 21), dtype=np.int)
         self.fitness_values = []
@@ -27,48 +29,47 @@ class Genetic:
             self.population[i] += individual
         return self.population
 
-    def selected_feature_list(self, population):
+    def selected_features(self, dna, train_x, test_x):
         """
         Return a training set that has features selected by the respective DNA.
 
         :return: A list that stores features determined by each dna
         """
-        selected_feature_list = []
-        for i in range(self.num_population):
-            selected_features = train_x[:, np.argwhere(population[i] == 1)]
-            selected_features = np.squeeze(selected_features)
-            selected_feature_list.append(selected_features)
-        return selected_feature_list
 
-    def fitness_list(self, f1_scores, feature_cost_list, population):
+        selected_features_train = train_x[:, np.argwhere(dna == 1)]
+        selected_features_train = np.squeeze(selected_features_train)
+        selected_features_test = test_x[:, np.argwhere(dna == 1)]
+        selected_features_test = np.squeeze(selected_features_test)
+
+        return selected_features_train, selected_features_test
+
+    def fitness(self, fbeta, feature_cost_list, dna):
         """
         Return a list of fitness values with respect to each DNA.
 
-        :param f1_scores: F1 score of svm classifier that uses certain features selected by the respective DNA.
+        :param fbeta_scores: F_beta score of svm classifier that uses certain features selected by the respective DNA.
         :param feature_cost_list: Feature costs are taken into account for cost sensitive learning.
         :param population: Matrix of current population.
         :return: Fitness values of each DNA in the population.
         """
-        self.fitness_values = []
-        for p in population:#self.population:
-            add_cost = 0
-            feat_cost = 0
 
-            if p[-1] == 1:
-                if p[-2] == 1 and p[-3] == 0:
-                    add_cost += feature_cost_list[-3]
-                elif p[-2] == 0 and p[-3] == 1:
-                    add_cost += feature_cost_list[-2]
-                elif p[-2] == 0 and p[-3] == 0:
-                    add_cost += feature_cost_list[-1]
+        subtract_cost = 0
+        feat_cost = 0
 
-            feat_cost += np.sum(feature_cost_list[np.argwhere(p == 1)]) + add_cost
-            feat_cost = feat_cost/np.sum(feature_cost_list)  # Normalize feature cost
+        if dna[-1] == 1:
+            if dna[-2] == 1 and dna[-3] == 0:
+                subtract_cost += feature_cost_list[-2]
+            elif dna[-2] == 0 and dna[-3] == 1:
+                subtract_cost += feature_cost_list[-3]
+            elif dna[-2] == 0 and dna[-3] == 0:
+                subtract_cost = 0
 
-            # fitness can be changed.....
-            fitness_val = f1_scores / feat_cost
-            self.fitness_values.append(fitness_val)
-        return np.array(self.fitness_values)
+        feat_cost += np.sum(feature_cost_list[np.argwhere(dna == 1)]) - subtract_cost
+        #feat_cost = feat_cost/np.sum(feature_cost_list)  # Normalize feature cost
+
+        fitness_val = np.exp(fbeta*7) / feat_cost
+        return fitness_val
+
 
     def crossover(self, population, fit_val):
         """
@@ -77,19 +78,20 @@ class Genetic:
         :param population:
         :return:
         """
-        num_pop_to_crossover = int(np.round(self.num_population*(1-self.survive_ratio)))
+        # print('Crossover method-------------')
+        num_pop_to_crossover = int(np.round(self.num_population-self.num_survive))#*(1-self.survive_ratio)))
 
         if num_pop_to_crossover % 2 == 1:
             num_pop_to_crossover -= 1
 
 
         selection_prob = np.squeeze(fit_val / np.sum(fit_val))
-        print('crossover selection probs: ', selection_prob)
+        # print('crossover selection probs: \n', selection_prob)
         crossover_idx = np.random.choice(len(population), num_pop_to_crossover, replace=False, p=selection_prob)
-        print('Crossover olmaya secilen idx: ', crossover_idx)
+        # print('Crossover olmaya secilen idx: ', crossover_idx)
         crossover_population = population[crossover_idx, :]
 
-        print('Pop to be crossover:\n', crossover_population)
+        # print('Pop to be crossover:\n', crossover_population)
 
         if num_pop_to_crossover % 2 == 1:
             print('Warning! Odd number of genes to crossover!')
@@ -115,19 +117,24 @@ class Genetic:
         :param evolved_population: Crossovered population.
         :return: Next generation that has mutated random individuals.
         """
+        # print('Mutate method----------')
         mutated_gen = []
         # DNA selection to be mutated can be improved by selecting DNAs whose fitness values are lower.
         num_pop_to_mutate = int(np.round(self.num_population*self.prob_mutation))
+
+        if num_pop_to_mutate == 0:
+            return evolved_population
+
         mutate_idx = np.random.choice(len(evolved_population), num_pop_to_mutate, replace=False)
-        print('IDX to mutate: ', mutate_idx)
+        # print('IDX to mutate: ', mutate_idx)
         mutate_dnas = evolved_population[mutate_idx, :]
-        print('dnas to be mutated:\n', mutate_dnas)
+        # print('dnas to be mutated:\n', mutate_dnas)
 
         # Mutate a random bit of each dna in selected portion of population (m.p individuals).
         current_dna_idx = 0
         for dna in mutate_dnas:
-            mutate_bit_idx = np.random.randint(22)
-            print('MUTATE BIT: ', mutate_bit_idx)
+            mutate_bit_idx = np.random.randint(len(dna))
+            # print('MUTATE BIT: ', mutate_bit_idx)
             dna[mutate_bit_idx] = np.bitwise_xor(dna[mutate_bit_idx], 1)
             evolved_population[mutate_idx[current_dna_idx]] = dna
             current_dna_idx += 1
@@ -139,18 +146,21 @@ class Genetic:
         Next generation is selected probabilistically, with higher probability as higher fitness values.
 
         """
-        #fit_val = np.array(self.fitness_values)
+        # print('Next generation method----------')
+        # fit_val = np.array(self.fitness_values)
         num_survive = int(np.round(self.num_population*self.survive_ratio))
+        self.num_survive = num_survive
 
         if num_survive % 2 == 1:
             num_survive += 1
 
         selection_prob = np.squeeze(fit_val / np.sum(fit_val))
-        print('Selection probs: ', selection_prob)
-        print('sum of probs: ', np.sum(selection_prob))
-
-        survive_idx = np.random.choice(len(population), num_survive, replace=False, p=selection_prob)
-        print('survive idx: ', survive_idx)
+        # print('Selection probs: \n', selection_prob)
+        # print('sum of probs: ', np.sum(selection_prob))
+        # print('POPULATION: \n', population)
+        # print('popsize: {}, prob: {}, and its size: {}'.format(population.shape[0], selection_prob, selection_prob.size))
+        survive_idx = np.random.choice(population.shape[0], num_survive, replace=False, p=selection_prob)
+        # print('survive idx: ', survive_idx)
 
         #next_generation = self.population[next_gen_idx, :]
         survived_dnas = population[survive_idx, :]
@@ -168,14 +178,14 @@ def evaluate(true_labels, predicted, cm=True):
     :return:
     """
 
-    accuracy = accuracy_score(true_labels, predicted)
+    accuracy = np.round(accuracy_score(true_labels, predicted), decimals=3)
     if cm is False:
         return accuracy
     else:
         cm = confusion_matrix(true_labels, predicted)
         cls_based_accuracies = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cls_based_accuracies = np.round(cls_based_accuracies.diagonal(), decimals=3)
         return accuracy, cm, cls_based_accuracies
-
 
 def calc_weighted_costs(Y):
     """
@@ -194,7 +204,82 @@ def calc_weighted_costs(Y):
     return cls1_weight*100, cls2_weight*100, cls3_weight*100
 
 
+def run_genetic(genetic_config, wclf):
 
+    population = genetic_config.init_population()
+    #print('Initial population:\n', population)
+
+    fit_vals = np.zeros((genetic_config.num_population, 1))
+    fittest_value_record = np.zeros((genetic_config.num_generations, 1))
+
+    fbeta_vals = np.zeros((genetic_config.num_population, 1))
+    fittest_fbeta_record = np.zeros((genetic_config.num_generations, 1))
+
+    cls_bsd_rec = []
+    best_dna_record = np.zeros((genetic_config.num_generations, 21), dtype=np.int)
+    best_acc_dna = []
+
+    for i in range(genetic_config.num_generations):
+        print('GENERATION: {} ------------------------------'.format(i))
+        print('Population:\n', population)
+
+        # HERE TRAIN SVM ACC. TO SELECTED FEATURES
+        # PASS F1 SCORES FOR EACH SVM TRAINED ON FEATURES THAT ARE SELECTED BY DNAs.
+        for j in range(genetic_config.num_population):
+            selected_x_train, selected_x_test = genetic_config.selected_features(population[j], train_x, test_x)
+            # selected_x_train = normalize(selected_x_train)
+            # selected_x_test = normalize(selected_x_test)
+
+            wclf.fit(selected_x_train, train_y)
+
+            predicted = wclf.predict(selected_x_train)
+            print('PREDICTED includes: ', np.unique(predicted))
+            #print('Test_Y includes: ', np.unique(train_y))
+
+            f_beta = fbeta_score(train_y, predicted, beta=1.1, average='weighted')
+            fbeta_vals[j] += f_beta
+
+            acc, cm, cls_based = evaluate(train_y, predicted)
+            cls_bsd_rec.append(cls_based)
+
+            if np.min(cls_based) > 0.83:
+                best_acc_dna.append(population[j])
+                print('Good DNA recorded. Index: ', len(cls_bsd_rec)-1)
+
+            # class_based_acc_record[j] += cls_based
+            # print('DNA{} F_beta score: {}'.format(j, f_beta))
+
+            fitness_val = genetic_config.fitness(f_beta, feature_costs, population[j])
+            # print('DNA{} fitness: {}'.format(j, fitness_val))
+            fit_vals[j] += fitness_val
+
+        fittest_value_record[i] += np.max(fit_vals)
+        fittest_fbeta_record[i] += fbeta_vals[np.argmax(fit_vals)]
+        best_dna_record[i] += population[np.argmax(fit_vals)]
+
+        print('\nFittest value: ', fittest_value_record[i])
+        print('Fittest FBETA value: {}\n'.format(fittest_fbeta_record[i]))
+        # print('Fittest Class-based acc: ', class_based_acc_record[np.argmax(fit_vals)])
+
+        # Create new generation
+        survived_dna = genetic_config.next_generation(population, fit_vals)
+        # print('direct Next GEN: \n', survived_dna)
+        crossed_dna = genetic_config.crossover(population, fit_vals)
+        # print('Crossed:\n', crossed_dna)
+        next_gen = np.concatenate((survived_dna, crossed_dna), axis=0)
+        # cp_next = np.copy(next_gen)
+        # print('NEXT GEN: \n', next_gen)
+        next_gen = genetic_config.mutate(next_gen)
+        # print('NEXT GEN: \n', next_gen)
+        population = next_gen
+
+        if i == genetic_config.num_generations-1:
+            last_best_idx = np.argmax(fit_vals)
+        # Zero-out fitness values for the new generation.
+        fit_vals = np.zeros((gen.num_population, 1))
+        fbeta_vals = np.zeros((gen.num_population, 1))
+
+    return fittest_value_record, fittest_fbeta_record, best_dna_record, cls_bsd_rec, last_best_idx, population, best_acc_dna
 
 #%% MAIN
 
@@ -207,50 +292,48 @@ feature_costs = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
 
 
 #%% CLASSIFIER: class-weighted SVM
-'''
+
 cls1_w, cls2_w, cls3_w = calc_weighted_costs(train_y)
 
-
 # Fit and train the model using weighted classes
-wclf = svm.SVC(kernel='linear', gamma='scale', class_weight={1: cls1_w, 2: cls2_w, 3: cls3_w})
-wclf.fit(train_x, train_y)
-
-# Predict labels
-predicted = wclf.predict(train_x)
-
-acc, cm, cls_based = evaluate(train_y, predicted)
-
-# Now the normalize the diagonal entries
-print('\nconfusion matrix:\n', cm)
-print('class-based: {}\noverall acc: {}'.format(cls_based.diagonal(), acc))
-print('kernel: {}, gamma: {}, shrinking: {}'.format(wclf.kernel, wclf.gamma, wclf.shrinking))
-
-f1_score = f1_score(train_y, predicted)
-'''
+wclf = svm.SVC(C=6, kernel='linear', gamma='auto', class_weight={1: cls1_w, 2: cls2_w, 3: cls3_w})
 
 #%% GENETIC
-gen = Genetic(8, 4, 0.4)
-population = gen.init_population()
+gen = Genetic(num_population=6, num_generations=21, prob_mutation=0.3, survive_ratio=0.4)
+fittest_values, fbeta_record, best_dnas, \
+class_based_acc_record, last_best_dna_idx, last_generation, best_acc_dna = run_genetic(gen, wclf)
 
-selected_features = gen.selected_feature_list(population)
-# HERE TRAIN SVM ACC. TO SELECTED FEATURES
-# PASS F1 SCORES FOR EACH SVM TRAINED ON FEATURES THAT ARE SELECTED BY DNAs.
-F1_score = 0.5
-fit_vals = gen.fitness_list(F1_score, feature_costs, population)
-print('fitness: ', fit_vals)
+print('Last Generation: \n', last_generation)
+print('Last best dna index: ', last_best_dna_idx)
+print('Fittest Vals:\n{}'.format(fittest_values))
+print('Fbeta Scores: \n{}'.format(fbeta_record))
+print('Last best class-based acc: ', class_based_acc_record[-gen.num_population:][last_best_dna_idx])
 
-# Create new generation
-survived_dna = gen.next_generation(population, fit_vals)
-print('direct Next GEN: \n', survived_dna)
-crossed_dna = gen.crossover(population, fit_vals)
-print('Crossed:\n', crossed_dna)
-next_gen = np.concatenate((survived_dna, crossed_dna), axis=0)
-#cp_next = np.copy(next_gen)
-print('NEXT GEN: \n', next_gen)
-next_gen = gen.mutate(next_gen)
-print('Mutated: \n', next_gen)
-#population = next_gen
+plt.plot(fittest_values)
+plt.ylabel('Fitness')
+plt.xlabel('Generation')
+plt.title('Fittest Value per Generation')
+plt.show()
 
+plt.plot(fbeta_record)
+plt.ylabel('Fbeta')
+plt.xlabel('Generation')
+plt.title('Fbeta Score per Generation')
+plt.show()
 
-# AGAIN TRAIN SVM WITH FEATURES SELECTED BY THE EVOLVED GENERATION. REPEAT UNTIL CONVERGENCE.
+class_based_acc_record = np.array(class_based_acc_record)
+x = np.arange(len(class_based_acc_record))
+yc1 = class_based_acc_record[:,0]
+yc2 = class_based_acc_record[:,1]
+yc3 = class_based_acc_record[:,2]
+y_array = np.array([yc1, yc2, yc3])
+labels = ['class1', 'class2', 'class3']
 
+for y_arr, label in zip(y_array, labels):
+    plt.plot(x, y_arr, label=label)
+
+plt.legend()
+plt.title('Class-based Fbeta Scores')
+plt.xlabel('DNAs (all generations)')
+plt.ylabel('Fbeta Score')
+plt.show()
